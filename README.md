@@ -1,6 +1,3 @@
----
-
-````markdown
 # Phase2L1CaloGCTEmulator
 
 Project overlay for Phase-2 L1 Calo GCT emulator development in CMSSW.
