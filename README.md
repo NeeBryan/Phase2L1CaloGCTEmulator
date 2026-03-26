@@ -1,14 +1,3 @@
-Yes — that makes sense.
-
-If `L1Trigger/L1TCalorimeter` is not actually in your repo as real source files, but the workflow needs it via `git cms-addpkg`, then the right thing to do is:
-
-* **do not commit fake/empty/cache-only content**
-* **document clearly in the README that this package must be added in the CMSSW area before build/run**
-
-That is a normal CMSSW-style setup.
-
-Below is a README you can use as a strong starting point.
-
 ---
 
 ````markdown
