@@ -1,0 +1,16 @@
+*.root
+*.log
+*.pyc
+*.o
+*.so
+*.pcm
+__pycache__/
+tmp/
+lib/
+bin/
+logs/
+objs/
+biglib/
+cfipython/
+.SCRAM/
+.scram/
