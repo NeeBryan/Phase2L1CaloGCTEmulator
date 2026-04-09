@@ -17,7 +17,7 @@
 #include "CommonTools/UtilAlgos/interface/TFileService.h"
 #include "FWCore/ServiceRegistry/interface/Service.h"
 
-#include "DataFormats/L1TCalorimeterPhase2/interface/RCT_output.h"
+#include "DataFormats/L1TCalorimeterPhase2/interface/GCT_output.h"
 
 class L1TCaloAnalyzer : public edm::one::EDAnalyzer<edm::one::SharedResources> {
 public:
@@ -29,29 +29,38 @@ public:
   void endJob() override;
 
 private:
-  using LinkCollection = l1tp2::rctOutputLinkCollection;
+  using LinkCollection = l1tp2::gctOutputLinkCollection;
   using LinkWord = ap_uint<576>;
 
-  void decodeClusters(const LinkWord& data,
-                      std::vector<int>& seedPt,
-                      std::vector<int>& clusterPt,
-                      std::vector<int>& clusterEta,
-                      std::vector<int>& clusterPhi,
-                      std::vector<int>& et5x5,
-                      std::vector<int>& wps,
-                      std::vector<int>& timing,
-                      std::vector<int>& spike,
-                      std::vector<int>& satur,
-                      std::vector<int>& brems,
-                      std::vector<int>& spare) const;
+  void decodeEG(const LinkWord& data,
+                std::vector<int>& energy,
+                std::vector<int>& eta,
+                std::vector<int>& phi,
+                std::vector<int>& hoe,
+                std::vector<int>& hoeWP,
+                std::vector<int>& iso,
+                std::vector<int>& isoWP,
+                std::vector<int>& fb,
+                std::vector<int>& timing,
+                std::vector<int>& shapeWP,
+                std::vector<int>& brems,
+                std::vector<int>& spare) const;
 
-  void decodeTowers(const LinkWord& data,
-                    int whichLocalTowerLink,
-                    std::vector<int>& towerEt,
-                    std::vector<int>& towerEta,
-                    std::vector<int>& towerPhi,
-                    std::vector<int>& towerHoe,
-                    std::vector<int>& towerFb) const;
+  void decodePF(const LinkWord& data,
+                std::vector<int>& energy,
+                std::vector<int>& eta,
+                std::vector<int>& phi,
+                std::vector<int>& hoe,
+                std::vector<int>& ecal,
+                std::vector<int>& hcal,
+                std::vector<int>& spare) const;
+
+  void decodeST(const LinkWord& data,
+                std::vector<int>& energy,
+                std::vector<int>& emEnergy,
+                std::vector<int>& eta,
+                std::vector<int>& phi,
+                std::vector<int>& flags) const;
 
   void fillRegion(const LinkCollection& coll, int regionIdx, const std::string& regionName);
 
@@ -70,36 +79,41 @@ private:
   int lumi_{0};
   int event_{0};
 
-  // one entry per raw link word across all 6 GCT regions
   std::vector<int> region_index_;
   std::vector<std::string> region_name_;
   std::vector<int> word_index_;
-  std::vector<int> phi_slot_;
-  std::vector<int> eta_side_slot_;
-  std::vector<int> local_link_index_;
-
-  // raw low 32 bits, only for quick debugging
+  std::vector<std::string> link_type_;
   std::vector<int> raw_link_word_low32_;
 
-  // decoded clusters: outer vector = one entry per raw link word
-  std::vector<std::vector<int>> cluster_seed_pt_;
-  std::vector<std::vector<int>> cluster_pt_;
-  std::vector<std::vector<int>> cluster_eta_;
-  std::vector<std::vector<int>> cluster_phi_;
-  std::vector<std::vector<int>> cluster_et5x5_;
-  std::vector<std::vector<int>> cluster_wps_;
-  std::vector<std::vector<int>> cluster_timing_;
-  std::vector<std::vector<int>> cluster_spike_;
-  std::vector<std::vector<int>> cluster_satur_;
-  std::vector<std::vector<int>> cluster_brems_;
-  std::vector<std::vector<int>> cluster_spare_;
+  // EG decoded
+  std::vector<std::vector<int>> eg_energy_;
+  std::vector<std::vector<int>> eg_eta_;
+  std::vector<std::vector<int>> eg_phi_;
+  std::vector<std::vector<int>> eg_hoe_;
+  std::vector<std::vector<int>> eg_hoeWP_;
+  std::vector<std::vector<int>> eg_iso_;
+  std::vector<std::vector<int>> eg_isoWP_;
+  std::vector<std::vector<int>> eg_fb_;
+  std::vector<std::vector<int>> eg_timing_;
+  std::vector<std::vector<int>> eg_shapeWP_;
+  std::vector<std::vector<int>> eg_brems_;
+  std::vector<std::vector<int>> eg_spare_;
 
-  // decoded towers: outer vector = one entry per raw link word
-  std::vector<std::vector<int>> tower_et_;
-  std::vector<std::vector<int>> tower_eta_;
-  std::vector<std::vector<int>> tower_phi_;
-  std::vector<std::vector<int>> tower_hoe_;
-  std::vector<std::vector<int>> tower_fb_;
+  // PF decoded
+  std::vector<std::vector<int>> pf_energy_;
+  std::vector<std::vector<int>> pf_eta_;
+  std::vector<std::vector<int>> pf_phi_;
+  std::vector<std::vector<int>> pf_hoe_;
+  std::vector<std::vector<int>> pf_ecal_;
+  std::vector<std::vector<int>> pf_hcal_;
+  std::vector<std::vector<int>> pf_spare_;
+
+  // ST decoded
+  std::vector<std::vector<int>> st_energy_;
+  std::vector<std::vector<int>> st_emEnergy_;
+  std::vector<std::vector<int>> st_eta_;
+  std::vector<std::vector<int>> st_phi_;
+  std::vector<std::vector<int>> st_flags_;
 };
 
 #endif
