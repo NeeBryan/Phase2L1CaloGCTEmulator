@@ -1,9 +1,10 @@
 /*
  * Description:
- *   Phase-2 GCT emulator, version 2:
+ *   Phase-2 GCT emulator:
  *   - consumes RCT output links (LinkOut0..3)
  *   - reorganizes them into pre-IP1 GCT input bundles
- *   - does NOT call GCT IP1 yet
+ *   - runs GCT IP1 on each bundle
+ *   - stores both pre-IP1 and post-IP1 outputs
  */
 
 #include <ap_int.h>
@@ -16,11 +17,21 @@
 #include "FWCore/Framework/interface/stream/EDProducer.h"
 #include "FWCore/Framework/interface/Event.h"
 #include "FWCore/Framework/interface/MakerMacros.h"
+#include "FWCore/MessageLogger/interface/MessageLogger.h"
+#include "FWCore/Utilities/interface/Exception.h"
 #include "FWCore/ParameterSet/interface/ConfigurationDescriptions.h"
 #include "FWCore/ParameterSet/interface/ParameterSet.h"
 #include "FWCore/ParameterSet/interface/ParameterSetDescription.h"
 
 #include "DataFormats/L1TCalorimeterPhase2/interface/RCT_output.h"
+#include "DataFormats/L1TCalorimeterPhase2/interface/GCT_output.h"
+
+// GCT IP1 firmware headers copied into interface
+#include "L1Trigger/L1CaloTrigger/interface/algo_topIP1gct_h.h"
+#include "L1Trigger/L1CaloTrigger/interface/bitonicSort16_h.h"
+#include "L1Trigger/L1CaloTrigger/interface/pfcluster_cpp.h"
+#include "L1Trigger/L1CaloTrigger/interface/algo_topIP1gct_cpp.h"
+#include "L1Trigger/L1CaloTrigger/interface/bitonicSort16_cpp.h"
 
 class Phase2L1CaloL1GCTEmulator : public edm::stream::EDProducer<> {
 public:
@@ -32,71 +43,79 @@ public:
 private:
   void produce(edm::Event&, const edm::EventSetup&) override;
 
-  using LinkCollection = l1tp2::rctOutputLinkCollection;
+  using PreIP1Collection = l1tp2::rctOutputLinkCollection;
+  using PostIP1Collection = l1tp2::gctOutputLinkCollection;
   using LinkWord = ap_uint<576>;
 
-  edm::EDGetTokenT<LinkCollection> link0Src_;
-  edm::EDGetTokenT<LinkCollection> link1Src_;
-  edm::EDGetTokenT<LinkCollection> link2Src_;
-  edm::EDGetTokenT<LinkCollection> link3Src_;
+  edm::EDGetTokenT<PreIP1Collection> link0Src_;
+  edm::EDGetTokenT<PreIP1Collection> link1Src_;
+  edm::EDGetTokenT<PreIP1Collection> link2Src_;
+  edm::EDGetTokenT<PreIP1Collection> link3Src_;
 
   static constexpr int kNRCTCards = 24;
   static constexpr int kNRCTCardPairs = 12;
   static constexpr int kNGCTRegions = 6;
   static constexpr int kLinksPerRCTCard = 4;
-  static constexpr int kRCTCardsPerGCTRegion = 8;     // 4 phi x 2 eta
-  static constexpr int kLinksPerGCTRegion = 32;       // 8 cards x 4 links
+  static constexpr int kRCTCardsPerGCTRegion = 8;  // 4 phi x 2 eta
+  static constexpr int kLinksPerGCTRegion = 32;    // 8 cards x 4 links
 
-  LinkWord getLinkWord(
-      const LinkCollection& link0,
-      const LinkCollection& link1,
-      const LinkCollection& link2,
-      const LinkCollection& link3,
-      int cardIdx,
-      int whichLink) const;
+  LinkWord getLinkWord(const PreIP1Collection& link0,
+                       const PreIP1Collection& link1,
+                       const PreIP1Collection& link2,
+                       const PreIP1Collection& link3,
+                       int cardIdx,
+                       int whichLink) const;
 
-  void appendCardLinks(
-      std::array<LinkWord, kLinksPerGCTRegion>& out,
-      int& writeIdx,
-      const LinkCollection& link0,
-      const LinkCollection& link1,
-      const LinkCollection& link2,
-      const LinkCollection& link3,
-      int cardIdx) const;
+  void appendCardLinks(std::array<LinkWord, kLinksPerGCTRegion>& out,
+                       int& writeIdx,
+                       const PreIP1Collection& link0,
+                       const PreIP1Collection& link1,
+                       const PreIP1Collection& link2,
+                       const PreIP1Collection& link3,
+                       int cardIdx) const;
 
-  std::array<LinkWord, kLinksPerGCTRegion> buildRegionInput(
-      const LinkCollection& link0,
-      const LinkCollection& link1,
-      const LinkCollection& link2,
-      const LinkCollection& link3,
-      int region) const;
+  std::array<LinkWord, kLinksPerGCTRegion> buildRegionInput(const PreIP1Collection& link0,
+                                                            const PreIP1Collection& link1,
+                                                            const PreIP1Collection& link2,
+                                                            const PreIP1Collection& link3,
+                                                            int region) const;
+
+  std::array<LinkWord, N_OUTPUT_LINKS> runIP1(
+      const std::array<LinkWord, kLinksPerGCTRegion>& regionInput) const;
 
   static int pairToNegCard(int pairIdx) { return 2 * pairIdx; }
   static int pairToPosCard(int pairIdx) { return 2 * pairIdx + 1; }
-
-  static std::string outputLabel(int region);
 };
 
 Phase2L1CaloL1GCTEmulator::Phase2L1CaloL1GCTEmulator(const edm::ParameterSet& iConfig)
-    : link0Src_(consumes<LinkCollection>(iConfig.getParameter<edm::InputTag>("LinkOut0"))),
-      link1Src_(consumes<LinkCollection>(iConfig.getParameter<edm::InputTag>("LinkOut1"))),
-      link2Src_(consumes<LinkCollection>(iConfig.getParameter<edm::InputTag>("LinkOut2"))),
-      link3Src_(consumes<LinkCollection>(iConfig.getParameter<edm::InputTag>("LinkOut3"))) {
-  produces<LinkCollection>("GCT1SLR3PreIP1");
-  produces<LinkCollection>("GCT1SLR1PreIP1");
-  produces<LinkCollection>("GCT2SLR3PreIP1");
-  produces<LinkCollection>("GCT2SLR1PreIP1");
-  produces<LinkCollection>("GCT3SLR3PreIP1");
-  produces<LinkCollection>("GCT3SLR1PreIP1");
+    : link0Src_(consumes<PreIP1Collection>(iConfig.getParameter<edm::InputTag>("LinkOut0"))),
+      link1Src_(consumes<PreIP1Collection>(iConfig.getParameter<edm::InputTag>("LinkOut1"))),
+      link2Src_(consumes<PreIP1Collection>(iConfig.getParameter<edm::InputTag>("LinkOut2"))),
+      link3Src_(consumes<PreIP1Collection>(iConfig.getParameter<edm::InputTag>("LinkOut3"))) {
+  produces<PreIP1Collection>("GCT1SLR3PreIP1");
+  produces<PreIP1Collection>("GCT1SLR1PreIP1");
+  produces<PreIP1Collection>("GCT2SLR3PreIP1");
+  produces<PreIP1Collection>("GCT2SLR1PreIP1");
+  produces<PreIP1Collection>("GCT3SLR3PreIP1");
+  produces<PreIP1Collection>("GCT3SLR1PreIP1");
+
+  produces<PostIP1Collection>("GCT1SLR3PostIP1");
+  produces<PostIP1Collection>("GCT1SLR1PostIP1");
+  produces<PostIP1Collection>("GCT2SLR3PostIP1");
+  produces<PostIP1Collection>("GCT2SLR1PostIP1");
+  produces<PostIP1Collection>("GCT3SLR3PostIP1");
+  produces<PostIP1Collection>("GCT3SLR1PostIP1");
+
+  static_assert(kLinksPerGCTRegion == N_INPUT_LINKS,
+                "kLinksPerGCTRegion must match GCT IP1 N_INPUT_LINKS");
 }
 
-ap_uint<576> Phase2L1CaloL1GCTEmulator::getLinkWord(
-    const LinkCollection& link0,
-    const LinkCollection& link1,
-    const LinkCollection& link2,
-    const LinkCollection& link3,
-    int cardIdx,
-    int whichLink) const {
+ap_uint<576> Phase2L1CaloL1GCTEmulator::getLinkWord(const PreIP1Collection& link0,
+                                                    const PreIP1Collection& link1,
+                                                    const PreIP1Collection& link2,
+                                                    const PreIP1Collection& link3,
+                                                    int cardIdx,
+                                                    int whichLink) const {
   if (cardIdx < 0 || cardIdx >= kNRCTCards) {
     throw cms::Exception("Phase2L1CaloL1GCTEmulator")
         << "Bad RCT card index: " << cardIdx;
@@ -110,25 +129,28 @@ ap_uint<576> Phase2L1CaloL1GCTEmulator::getLinkWord(
   }
 
   switch (whichLink) {
-    case 0: return link0[cardIdx].data();
-    case 1: return link1[cardIdx].data();
-    case 2: return link2[cardIdx].data();
-    case 3: return link3[cardIdx].data();
+    case 0:
+      return link0[cardIdx].data();
+    case 1:
+      return link1[cardIdx].data();
+    case 2:
+      return link2[cardIdx].data();
+    case 3:
+      return link3[cardIdx].data();
     default:
       throw cms::Exception("Phase2L1CaloL1GCTEmulator")
           << "Bad link number: " << whichLink;
   }
 }
 
-void Phase2L1CaloL1GCTEmulator::appendCardLinks(
-    std::array<LinkWord, kLinksPerGCTRegion>& out,
-    int& writeIdx,
-    const LinkCollection& link0,
-    const LinkCollection& link1,
-    const LinkCollection& link2,
-    const LinkCollection& link3,
-    int cardIdx) const {
-  // Assumed per-card order before GCT IP1:
+void Phase2L1CaloL1GCTEmulator::appendCardLinks(std::array<LinkWord, kLinksPerGCTRegion>& out,
+                                                int& writeIdx,
+                                                const PreIP1Collection& link0,
+                                                const PreIP1Collection& link1,
+                                                const PreIP1Collection& link2,
+                                                const PreIP1Collection& link3,
+                                                int cardIdx) const {
+  // Per-card order before GCT IP1:
   //   link0 = EG clusters
   //   link1 = tower fiber 0
   //   link2 = tower fiber 1
@@ -140,12 +162,11 @@ void Phase2L1CaloL1GCTEmulator::appendCardLinks(
 }
 
 std::array<ap_uint<576>, Phase2L1CaloL1GCTEmulator::kLinksPerGCTRegion>
-Phase2L1CaloL1GCTEmulator::buildRegionInput(
-    const LinkCollection& link0,
-    const LinkCollection& link1,
-    const LinkCollection& link2,
-    const LinkCollection& link3,
-    int region) const {
+Phase2L1CaloL1GCTEmulator::buildRegionInput(const PreIP1Collection& link0,
+                                            const PreIP1Collection& link1,
+                                            const PreIP1Collection& link2,
+                                            const PreIP1Collection& link3,
+                                            int region) const {
   if (region < 0 || region >= kNGCTRegions) {
     throw cms::Exception("Phase2L1CaloL1GCTEmulator")
         << "Bad GCT region: " << region;
@@ -154,22 +175,30 @@ Phase2L1CaloL1GCTEmulator::buildRegionInput(
   std::array<LinkWord, kLinksPerGCTRegion> out{};
   int writeIdx = 0;
 
+  // Region order matched to produced labels:
+  // 0 -> GCT1SLR3
+  // 1 -> GCT1SLR1
+  // 2 -> GCT2SLR3
+  // 3 -> GCT2SLR1
+  // 4 -> GCT3SLR3
+  // 5 -> GCT3SLR1
   static constexpr int kRegionPairMap[6][4] = {
-  {0, 1, 2, 3},    // SLR 1.3
-  {4, 5, 6, 7},    // SLR 2.3
-  {8, 9, 10, 11},  // SLR 3.3
-  {10, 11, 0, 1},  // SLR 3.1
-  {2, 3, 4, 5},    // SLR 1.1
-  {6, 7, 8, 9}     // SLR 2.1
+      {0, 1, 2, 3},     // GCT1SLR3
+      {10, 11, 0, 1},   // GCT1SLR1
+      {4, 5, 6, 7},     // GCT2SLR3
+      {2, 3, 4, 5},     // GCT2SLR1
+      {8, 9, 10, 11},   // GCT3SLR3
+      {6, 7, 8, 9}      // GCT3SLR1
   };
 
   for (int phiSlot = 0; phiSlot < 4; ++phiSlot) {
-  const int pairIdx = kRegionPairMap[region][phiSlot];
-  const int negCard = pairToNegCard(pairIdx);
-  const int posCard = pairToPosCard(pairIdx);
+    const int pairIdx = kRegionPairMap[region][phiSlot];
+    const int negCard = pairToNegCard(pairIdx);
+    const int posCard = pairToPosCard(pairIdx);
 
-  appendCardLinks(out, writeIdx, link0, link1, link2, link3, posCard);
-  appendCardLinks(out, writeIdx, link0, link1, link2, link3, negCard);
+    // Keep the same ordering you already used: positive eta card first, then negative eta card.
+    appendCardLinks(out, writeIdx, link0, link1, link2, link3, posCard);
+    appendCardLinks(out, writeIdx, link0, link1, link2, link3, negCard);
   }
 
   if (writeIdx != kLinksPerGCTRegion) {
@@ -181,23 +210,34 @@ Phase2L1CaloL1GCTEmulator::buildRegionInput(
   return out;
 }
 
-std::string Phase2L1CaloL1GCTEmulator::outputLabel(int region) {
-  switch (region) {
-    case 0: return "GCT1SLR3PreIP1";
-    case 1: return "GCT1SLR1PreIP1";
-    case 2: return "GCT2SLR3PreIP1";
-    case 3: return "GCT2SLR1PreIP1";
-    case 4: return "GCT3SLR3PreIP1";
-    case 5: return "GCT3SLR1PreIP1";
-    default: return "INVALID";
+std::array<ap_uint<576>, N_OUTPUT_LINKS> Phase2L1CaloL1GCTEmulator::runIP1(
+    const std::array<LinkWord, kLinksPerGCTRegion>& regionInput) const {
+  ap_uint<576> link_in[N_INPUT_LINKS];
+  ap_uint<576> link_out[N_OUTPUT_LINKS];
+
+  for (int i = 0; i < N_INPUT_LINKS; ++i) {
+    link_in[i] = regionInput[i];
   }
+
+  for (int i = 0; i < N_OUTPUT_LINKS; ++i) {
+    link_out[i] = 0;
+  }
+
+  algo_topIP1gct(link_in, link_out);
+
+  std::array<LinkWord, N_OUTPUT_LINKS> out{};
+  for (int i = 0; i < N_OUTPUT_LINKS; ++i) {
+    out[i] = link_out[i];
+  }
+
+  return out;
 }
 
 void Phase2L1CaloL1GCTEmulator::produce(edm::Event& iEvent, const edm::EventSetup&) {
-  edm::Handle<LinkCollection> hLink0;
-  edm::Handle<LinkCollection> hLink1;
-  edm::Handle<LinkCollection> hLink2;
-  edm::Handle<LinkCollection> hLink3;
+  edm::Handle<PreIP1Collection> hLink0;
+  edm::Handle<PreIP1Collection> hLink1;
+  edm::Handle<PreIP1Collection> hLink2;
+  edm::Handle<PreIP1Collection> hLink3;
 
   iEvent.getByToken(link0Src_, hLink0);
   iEvent.getByToken(link1Src_, hLink1);
@@ -209,26 +249,44 @@ void Phase2L1CaloL1GCTEmulator::produce(edm::Event& iEvent, const edm::EventSetu
         << "Failed to get one or more RCT link collections.";
   }
 
-  auto out0 = std::make_unique<LinkCollection>();
-  auto out1 = std::make_unique<LinkCollection>();
-  auto out2 = std::make_unique<LinkCollection>();
-  auto out3 = std::make_unique<LinkCollection>();
-  auto out4 = std::make_unique<LinkCollection>();
-  auto out5 = std::make_unique<LinkCollection>();
+  // Pre-IP1 outputs
+  auto out0 = std::make_unique<PreIP1Collection>();
+  auto out1 = std::make_unique<PreIP1Collection>();
+  auto out2 = std::make_unique<PreIP1Collection>();
+  auto out3 = std::make_unique<PreIP1Collection>();
+  auto out4 = std::make_unique<PreIP1Collection>();
+  auto out5 = std::make_unique<PreIP1Collection>();
 
-  std::array<LinkCollection*, 6> outputs = {{
-      out0.get(), out1.get(), out2.get(), out3.get(), out4.get(), out5.get()
-  }};
+  std::array<PreIP1Collection*, 6> preOutputs = {
+      {out0.get(), out1.get(), out2.get(), out3.get(), out4.get(), out5.get()}};
+
+  // Post-IP1 outputs
+  auto post0 = std::make_unique<PostIP1Collection>();
+  auto post1 = std::make_unique<PostIP1Collection>();
+  auto post2 = std::make_unique<PostIP1Collection>();
+  auto post3 = std::make_unique<PostIP1Collection>();
+  auto post4 = std::make_unique<PostIP1Collection>();
+  auto post5 = std::make_unique<PostIP1Collection>();
+
+  std::array<PostIP1Collection*, 6> postOutputs = {
+      {post0.get(), post1.get(), post2.get(), post3.get(), post4.get(), post5.get()}};
 
   for (int region = 0; region < kNGCTRegions; ++region) {
     const auto regionLinks = buildRegionInput(*hLink0, *hLink1, *hLink2, *hLink3, region);
 
+    // Keep existing pre-IP1 products
     for (const auto& word : regionLinks) {
-      outputs[region]->emplace_back(word);
+      preOutputs[region]->emplace_back(word);
+    }
+
+    // Run IP1 and store post-IP1 products
+    const auto ip1Links = runIP1(regionLinks);
+    for (const auto& word : ip1Links) {
+      postOutputs[region]->emplace_back(word);
     }
   }
 
-    edm::LogPrint("GCTEmulator") << "Input RCT sizes:"
+  edm::LogPrint("GCTEmulator") << "Input RCT sizes:"
                                << " LinkOut0=" << hLink0->size()
                                << " LinkOut1=" << hLink1->size()
                                << " LinkOut2=" << hLink2->size()
@@ -241,6 +299,12 @@ void Phase2L1CaloL1GCTEmulator::produce(edm::Event& iEvent, const edm::EventSetu
   edm::LogPrint("GCTEmulator") << "About to put GCT3SLR3PreIP1 size = " << out4->size();
   edm::LogPrint("GCTEmulator") << "About to put GCT3SLR1PreIP1 size = " << out5->size();
 
+  edm::LogPrint("GCTEmulator") << "About to put GCT1SLR3PostIP1 size = " << post0->size();
+  edm::LogPrint("GCTEmulator") << "About to put GCT1SLR1PostIP1 size = " << post1->size();
+  edm::LogPrint("GCTEmulator") << "About to put GCT2SLR3PostIP1 size = " << post2->size();
+  edm::LogPrint("GCTEmulator") << "About to put GCT2SLR1PostIP1 size = " << post3->size();
+  edm::LogPrint("GCTEmulator") << "About to put GCT3SLR3PostIP1 size = " << post4->size();
+  edm::LogPrint("GCTEmulator") << "About to put GCT3SLR1PostIP1 size = " << post5->size();
 
   iEvent.put(std::move(out0), "GCT1SLR3PreIP1");
   iEvent.put(std::move(out1), "GCT1SLR1PreIP1");
@@ -248,6 +312,13 @@ void Phase2L1CaloL1GCTEmulator::produce(edm::Event& iEvent, const edm::EventSetu
   iEvent.put(std::move(out3), "GCT2SLR1PreIP1");
   iEvent.put(std::move(out4), "GCT3SLR3PreIP1");
   iEvent.put(std::move(out5), "GCT3SLR1PreIP1");
+
+  iEvent.put(std::move(post0), "GCT1SLR3PostIP1");
+  iEvent.put(std::move(post1), "GCT1SLR1PostIP1");
+  iEvent.put(std::move(post2), "GCT2SLR3PostIP1");
+  iEvent.put(std::move(post3), "GCT2SLR1PostIP1");
+  iEvent.put(std::move(post4), "GCT3SLR3PostIP1");
+  iEvent.put(std::move(post5), "GCT3SLR1PostIP1");
 }
 
 void Phase2L1CaloL1GCTEmulator::fillDescriptions(edm::ConfigurationDescriptions& descriptions) {
