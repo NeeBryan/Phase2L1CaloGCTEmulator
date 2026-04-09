@@ -67,10 +67,9 @@
   <class name="l1tp2::rctOutputLinkCollection" />
   <class name="edm::Wrapper<l1tp2::rctOutputLinkCollection>" />
 
-  <class name="l1tp2::gctOutputLink" ClassVersion="5">
-    <version ClassVersion="5" checksum="2861325974"/>
+  <class name="l1tp2::gctOutputLink" ClassVersion="4">
+      <version ClassVersion="4" checksum="2861325974"/>
   </class>
-
   <class name="std::vector<l1tp2::gctOutputLink>" />
   <class name="l1tp2::gctOutputLinkCollection" />
   <class name="edm::Wrapper<l1tp2::gctOutputLinkCollection>" />
