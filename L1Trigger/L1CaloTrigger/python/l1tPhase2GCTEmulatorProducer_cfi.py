@@ -1,3 +1,11 @@
+"""
+Description
+-----------
+CMSSW configuration fragment for the complete GCT IP1 -> IP2 emulator.
+The producer consumes the four RCT output products and publishes PreIP1,
+PostIP1, PreIP2, and PostIP2 link collections.
+"""
+
 import FWCore.ParameterSet.Config as cms
 
 l1tPhase2GCTEmulatorProducer = cms.EDProducer(
